@@ -104,15 +104,29 @@ class LaneFinder:
         else:
             out_img = None
 
-        self.find_poly_with_window(bin_image, lane_pts_l, lane_pts_r, nonzerox, nonzeroy, debug, out_img)
+        WIN_PADDING = 100
+        if self.left_line.detected & self.right_line.detected:
 
-        lane_pts_l = np.concatenate(lane_pts_l)
+            ll = self.left_line.best_fit
+            lr = self.right_line.best_fit
+
+
+            lane_pts_l = (ll[0]*nonzeroy**2 + ll[1]*nonzeroy + ll[2] - WIN_PADDING < nonzerox) \
+                         & (nonzerox < ll[0]*nonzeroy**2 + ll[1]*nonzeroy + ll[2] + WIN_PADDING)
+            lane_pts_r = (lr[0]*nonzeroy**2 + lr[1]*nonzeroy + lr[2] - WIN_PADDING < nonzerox) \
+                         & (nonzerox < lr[0]*nonzeroy**2 + lr[1]*nonzeroy + lr[2] + WIN_PADDING)
+
+        else:
+            self.find_poly_with_window(bin_image, lane_pts_l, lane_pts_r, nonzerox, nonzeroy, debug, out_img,
+                                       win_padding=WIN_PADDING)
+            lane_pts_l = np.concatenate(lane_pts_l)
+            lane_pts_r = np.concatenate(lane_pts_r)
+
         lane_left_x = nonzerox[lane_pts_l]
         lane_left_y = nonzeroy[lane_pts_l]
 
         lane_left_coef = np.polyfit(lane_left_y, lane_left_x, 2)
 
-        lane_pts_r = np.concatenate(lane_pts_r)
         lane_right_x = nonzerox[lane_pts_r]
         lane_right_y = nonzeroy[lane_pts_r]
 
@@ -153,21 +167,30 @@ class LaneFinder:
         y_at_bottom = bin_image.shape[0]
         left_lane_pos = lane_left_coef[0] * y_at_bottom**2 + lane_left_coef[1] * y_at_bottom + lane_left_coef[2]
         right_lane_pos = lane_right_coef[0] * y_at_bottom**2 + lane_right_coef[1] * y_at_bottom + lane_right_coef[2]
-        lane_center = (right_lane_pos - left_lane_pos) / 2
+        lane_center = (right_lane_pos + left_lane_pos) / 2
         car_center = bin_image.shape[1] / 2
 
         car_displacement = car_center - lane_center
+        if debug:
+            print('Displacement; left_lane_pos={}, right_lane_pos={}, lane_center={}, car_center={}'
+                  .format(left_lane_pos, right_lane_pos, lane_center, car_center))
 
-        if debug: print('Radius l={:.1f}, r={:.1f}, lane_center={:.1f}, car_delta={:.1f}m'
+        self.left_line.detected = True
+        self.left_line.add_fit(lane_left_coef)
+
+        self.right_line.detected = True
+        self.right_line.add_fit(lane_right_coef)
+
+        if debug: print('Radius l={:.1f}, r={:.1f}, lane_center={:.1f}, car_delta={:.2f}m'
                         .format(left_curverad, right_curverad, lane_center, car_displacement * x_px2m))
 
         lane_mask = self.get_lane_region(bin_image.shape, lane_left_coef, lane_right_coef, self.get_transformation_matrix(reverse=True), debug=debug)
 
-        return lane_mask, left_curverad, right_curverad, car_displacement
+        return lane_mask, left_curverad, right_curverad, car_displacement * x_px2m
 
 
-    def find_poly_with_window(self, bin_image, lane_pts_l, lane_pts_r, nonzerox, nonzeroy, debug, debug_img,
-                              WIN_N = 10, WIN_PADDING = 100, WIN_MIN_PX_TO_RECENTER = 300):
+    def find_poly_with_window(self, bin_image, lane_pts_l, lane_pts_r, nonzerox, nonzeroy, debug, debug_img, WIN_N=10,
+                              win_padding=100, WIN_MIN_PX_TO_RECENTER=300):
         """
         Use sliding window to find lane lines.
         This function first does search for start points using historgram of active pixels of the bottom 3rd of image.
@@ -184,7 +207,7 @@ class LaneFinder:
         is sent directly ot plt.
         :param win_height:
         :param WIN_N:
-        :param WIN_PADDING:
+        :param win_padding:
         :param WIN_MIN_PX_TO_RECENTER:
         :return:
         """
@@ -209,8 +232,8 @@ class LaneFinder:
         for win_y_idx in range(WIN_N * win_height, 0, -win_height):
 
             # left lane line
-            win_left_x_low = center_x_left - WIN_PADDING
-            win_left_x_high = center_x_left + WIN_PADDING
+            win_left_x_low = center_x_left - win_padding
+            win_left_x_high = center_x_left + win_padding
 
             if debug:
                 cv2.rectangle(debug_img, (win_left_x_low, win_y_idx), (win_left_x_high, win_y_idx - win_height),
@@ -225,8 +248,8 @@ class LaneFinder:
                 center_x_left = int(np.mean(nonzerox[left_px_found_mask]))
 
             ### Right lane line
-            win_right_x_low = center_x_right - WIN_PADDING
-            win_right_x_high = center_x_right + WIN_PADDING
+            win_right_x_low = center_x_right - win_padding
+            win_right_x_high = center_x_right + win_padding
 
             if debug:
                 cv2.rectangle(debug_img, (win_right_x_low, win_y_idx), (win_right_x_high, win_y_idx - win_height),
@@ -279,7 +302,7 @@ class LaneFinder:
     #     undist = cv2.polylines(undist, [pts], True, (255,0,0))
 
         im_shape = (img.shape[1], img.shape[0])
-        transformed = cv2.warpPerspective(undist, self.warp_mtx, im_shape)
+        transformed = cv2.warpPerspective(undist, self.warp_mtx, im_shape, flags=cv2.INTER_NEAREST)
         return transformed
 
 
@@ -422,3 +445,7 @@ class LaneFinder:
         return binary
 
 
+    def reset(self):
+        """ Reset state """
+        self.left_line = Line()
+        self.right_line = Line()

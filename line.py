@@ -12,6 +12,7 @@ class Line:
         self.recent_xfitted = []
         # average x values of the fitted line over the last n iterations
         self.bestx = None
+
         # polynomial coefficients averaged over the last n iterations
         self.best_fit = None
         # polynomial coefficients for the most recent fit
@@ -24,3 +25,11 @@ class Line:
         self.allx = None
         # y values for detected line pixels
         self.ally = None
+
+    def add_fit(self, poly_fit):
+        self.current_fit = poly_fit
+
+        if self.best_fit is not None:
+            self.best_fit = (self.best_fit + poly_fit) / 2
+        else:
+            self.best_fit = poly_fit
