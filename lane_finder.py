@@ -1,16 +1,22 @@
 import matplotlib.pyplot as plt
 import cv2
 import numpy as np
+from line import Line
+
+COLOR_INFO_TEXT = (218, 217, 108)
 
 
 class LaneFinder:
 
-    def __init__(self, camera_mtx, dist_mtx):
+    def __init__(self, camera_mtx, dist_coef):
         self.camera_mtx = camera_mtx
-        self.dist_mtx = dist_mtx
+        self.dist_coef = dist_coef
         self.warp_mtx = self.get_transformation_matrix()
 
-    def processImage(self, image, debug=False):
+        self.left_line = Line()
+        self.right_line = Line()
+
+    def process_image(self, image, debug=False):
         """
         Take the frame of road view and overlay it with detected lane region.
 
@@ -21,27 +27,44 @@ class LaneFinder:
         """
     #     image = cv2.undistort(image, mtx, dist, None, None)
 
-        absx_binary = self.abs_sobel_thresh(image, orient='x', sobel_kernel=3, thresh=(20, 130))
-        absy_binary = self.abs_sobel_thresh(image, orient='y', sobel_kernel=3, thresh=(30, 120))
-        mag_binary = self.mag_thresh(image, sobel_kernel=3, mag_thresh=(30, 130))
-        dir_binary = self.dir_threshold(image, sobel_kernel=9, thresh=(0.7, 1.3))
-        hls_binary = self.hls_threshold(image, 's', thresh=(100,240))
-        hlsh_binary = self.hls_threshold(image, 'h', thresh=(5,100))
+        # perform perspective transformation
+        undist = self.undistort_transform(image)
+
+        if debug:
+            plt.imshow(undist)
+            plt.show()
+
+        img = undist
+        absx_binary = self.abs_sobel_thresh(img, orient='x', sobel_kernel=3, thresh=(20, 130))
+        absy_binary = self.abs_sobel_thresh(img, orient='y', sobel_kernel=3, thresh=(30, 120))
+        mag_binary = self.mag_thresh(img, sobel_kernel=3, mag_thresh=(30, 130))
+        dir_binary = self.dir_threshold(img, sobel_kernel=9, thresh=(0.7, 1.3))
+        hls_binary = self.hls_threshold(img, 's', thresh=(100,240))
+        hlsh_binary = self.hls_threshold(img, 'h', thresh=(5,100))
 
     #     stacked = np.dstack((np.zeros_like(hls_binary), hls_binary, mag_binary))
 
         combined = np.zeros_like(dir_binary, np.uint8)
-        combined[(((absx_binary==1)) | ((mag_binary == 1) & (dir_binary==1))) | ((hls_binary==1) & (hlsh_binary==1))] = 1
+        combined[
+            ((absx_binary == 1) | ((mag_binary == 1) & (dir_binary == 1)))
+                 | ((hls_binary == 1) & (hlsh_binary == 1))
+        ] = 1
 
-        # perform perspective transformation
-        undist = self.undistort_transform(combined, self.camera_mtx, self.dist_mtx, self.warp_mtx)
+        if debug:
+            plt.imshow(combined, cmap='gray')
+            plt.show()
 
-        lane_mask, lr, rr = self.findLaneLines(undist, debug=debug)
+
+        lane_mask, lr, rr, displacement = self.find_lane_lines(combined, debug=debug)
 
         res = cv2.addWeighted(image, 1, lane_mask, 0.8, 0)
         image_text = 'Radius l={:.1f}m, r={:.1f}m'.format(lr, rr)
         res = cv2.putText(res, image_text, (int(res.shape[0] / 5), int(res.shape[1] * 0.05)),
-                          cv2.FONT_HERSHEY_PLAIN, 4.0, (218, 217, 108), thickness=2)
+                          cv2.FONT_HERSHEY_PLAIN, 4.0, COLOR_INFO_TEXT, thickness=2)
+
+        txt2 = 'Car is {:.1f}m from center'.format(displacement)
+        res = cv2.putText(res, txt2, (int(res.shape[0] / 5), int(res.shape[1] * 0.05 + 50)),
+                          cv2.FONT_HERSHEY_PLAIN, 4.0, COLOR_INFO_TEXT, thickness=2)
     #     plot_image_pair(image, path, undist, cmap2='gray')
     #     combined = np.reshape(combined, (combined.shape[0], combined.shape[1], 1))
     #     print(combined.shape)
@@ -49,90 +72,39 @@ class LaneFinder:
 
 
 
-    def processVideoFrame(self, image):
+    def process_video_frame(self, image):
         """
         Helper function used for debuggin purposes, so if processImage function returns binary mask -
         it can be used for video processin
         """
-        return cv2.cvtColor(self.processImage(image) * 255, cv2.COLOR_GRAY2RGB)
+        return cv2.cvtColor(self.process_image(image) * 255, cv2.COLOR_GRAY2RGB)
 
 
-    def findLaneLines(self, bin_image, debug=False):
+    def find_lane_lines(self, bin_image, debug=False):
         """
         Analyzes image binary map for lane lines.
         Input should be a filtered image, so any non-zero pixel treated as valuable information.
 
         :param bin_image: binary image array to process.
         :returns: binary mask or detected lane region
+                  radius of left lane curvature (m)
+                  radius of right lane curvature (m)
+                  displacement of car relative to center (m)
         """
-        lane_hist = np.sum(bin_image[int(bin_image.shape[0]/3):], axis=0)
-
-        if debug:
-            plt.plot(lane_hist)
-            plt.show
-
-        # find where to start searching for lanes
-        l_start = np.argmax(lane_hist[:int(lane_hist.shape[0]//2)])
-        r_start = np.argmax(lane_hist[int(lane_hist.shape[0]//2):]) + int(lane_hist.shape[0]//2)
-        if debug: print('Starting lane search from left={}, right={}'.format(l_start, r_start))
-
 
         nonzero = np.nonzero(bin_image)
         nonzeroy = nonzero[0]
         nonzerox = nonzero[1]
 
-        # Sliding window parameters
-        win_n = 10
-        win_padding = 100
-        win_height = int(bin_image.shape[0] / win_n)
-        win_min_px_per_window = 50
-        if debug: print('Win height: {}, n_windows={}'.format(win_height, win_n))
-
-        if debug:
-            out_img = np.dstack((bin_image, bin_image, bin_image)) * 255
-
         lane_pts_l = []
         lane_pts_r = []
 
-        #window center positions
-        center_x_left = l_start
-        center_x_right = r_start
-        if debug: print('left_center_x={}'.format(center_x_left))
+        if debug:
+            out_img = np.dstack((bin_image, bin_image, bin_image)) * 255
+        else:
+            out_img = None
 
-        for win_y_idx in range(win_n * win_height, 0, -win_height):
-
-            # left lane line
-            win_left_x_low = center_x_left - win_padding
-            win_left_x_high = center_x_left + win_padding
-
-            if debug:
-                cv2.rectangle(out_img, (win_left_x_low, win_y_idx), (win_left_x_high, win_y_idx - win_height), (0, 255, 0))
-
-            left_px_found_mask = ((win_left_x_low < nonzerox) & (nonzerox < win_left_x_high)
-             & (win_y_idx - win_height <= nonzeroy) & (nonzeroy < win_y_idx)).nonzero()[0]
-
-            lane_pts_l.append(left_px_found_mask)
-            if len(left_px_found_mask) > win_min_px_per_window:
-                # set mean point
-                center_x_left = int(np.mean(nonzerox[left_px_found_mask]))
-
-            ### Right lane line
-            win_right_x_low = center_x_right - win_padding
-            win_right_x_high = center_x_right + win_padding
-
-            if debug:
-                cv2.rectangle(out_img, (win_right_x_low, win_y_idx), (win_right_x_high, win_y_idx - win_height), (0, 255, 0))
-
-            right_px_found_mask = ((win_right_x_low < nonzerox) & (nonzerox < win_right_x_high)
-             & (win_y_idx - win_height <= nonzeroy) & (nonzeroy < win_y_idx)).nonzero()[0]
-
-            lane_pts_r.append(right_px_found_mask)
-            if len(right_px_found_mask) > win_min_px_per_window:
-                # set mean point
-                center_x_right = int(np.mean(nonzerox[right_px_found_mask]))
-
-
-            if debug: print('win_y={}, left_center_x={}, right_center_x={}'.format(win_y_idx, center_x_left, center_x_right))
+        self.find_poly_with_window(bin_image, lane_pts_l, lane_pts_r, nonzerox, nonzeroy, debug, out_img)
 
         lane_pts_l = np.concatenate(lane_pts_l)
         lane_left_x = nonzerox[lane_pts_l]
@@ -167,21 +139,110 @@ class LaneFinder:
 
 
         # Curvature radius
-        y_px = 30/720
-        x_px = 3.7/756
+        y_px2m = 30/720
+        x_px2m = 3.7/756
 
-        lane_real_left_coef = np.polyfit(lane_left_y * y_px, lane_left_x * x_px, 2)
-        lane_real_right_coef = np.polyfit(lane_right_y * y_px, lane_right_x * x_px, 2)
+        lane_real_left_coef = np.polyfit(lane_left_y * y_px2m, lane_left_x * x_px2m, 2)
+        lane_real_right_coef = np.polyfit(lane_right_y * y_px2m, lane_right_x * x_px2m, 2)
 
-        y_eval = bin_image.shape[0] * y_px
+        y_eval = bin_image.shape[0] * y_px2m
         left_curverad = ((1 + (2*lane_real_left_coef[0]*y_eval + lane_real_left_coef[1])**2)**1.5) / np.absolute(2*lane_real_left_coef[0])
         right_curverad = ((1 + (2*lane_real_right_coef[0]*y_eval + lane_real_right_coef[1])**2)**1.5) / np.absolute(2*lane_real_right_coef[0])
 
-        if debug: print('Radius l={}, r={}'.format(left_curverad, right_curverad))
+        #where lane lines are at the bottom of the image
+        y_at_bottom = bin_image.shape[0]
+        left_lane_pos = lane_left_coef[0] * y_at_bottom**2 + lane_left_coef[1] * y_at_bottom + lane_left_coef[2]
+        right_lane_pos = lane_right_coef[0] * y_at_bottom**2 + lane_right_coef[1] * y_at_bottom + lane_right_coef[2]
+        lane_center = (right_lane_pos - left_lane_pos) / 2
+        car_center = bin_image.shape[1] / 2
+
+        car_displacement = car_center - lane_center
+
+        if debug: print('Radius l={:.1f}, r={:.1f}, lane_center={:.1f}, car_delta={:.1f}m'
+                        .format(left_curverad, right_curverad, lane_center, car_displacement * x_px2m))
 
         lane_mask = self.get_lane_region(bin_image.shape, lane_left_coef, lane_right_coef, self.get_transformation_matrix(reverse=True), debug=debug)
 
-        return (lane_mask, left_curverad, right_curverad)
+        return lane_mask, left_curverad, right_curverad, car_displacement
+
+
+    def find_poly_with_window(self, bin_image, lane_pts_l, lane_pts_r, nonzerox, nonzeroy, debug, debug_img,
+                              WIN_N = 10, WIN_PADDING = 100, WIN_MIN_PX_TO_RECENTER = 300):
+        """
+        Use sliding window to find lane lines.
+        This function first does search for start points using historgram of active pixels of the bottom 3rd of image.
+        All image is divided vertically in WIN_N windows.
+        If window has more than WIN_MIN_PX_TO_RECENTER - that window is added to a resulting array of active pixels.
+
+        :param bin_image: binary image of active pixels (main image)
+        :param lane_pts_l:
+        :param lane_pts_r:
+        :param nonzerox:
+        :param nonzeroy:
+        :param debug: debug mode on (True) or off (False). Produces extra output. Designed to be run in ipynb to show images.
+        :param debug_img: debug canvas to paint on. This canvas is used to paint resulting mask. Intermediate output
+        is sent directly ot plt.
+        :param win_height:
+        :param WIN_N:
+        :param WIN_PADDING:
+        :param WIN_MIN_PX_TO_RECENTER:
+        :return:
+        """
+        lane_hist = np.sum(bin_image[int(bin_image.shape[0]/3):], axis=0)
+
+        if debug:
+            plt.plot(lane_hist)
+            plt.show
+
+        # find where to start searching for lanes
+        l_start = np.argmax(lane_hist[:int(lane_hist.shape[0]//2)])
+        r_start = np.argmax(lane_hist[int(lane_hist.shape[0]//2):]) + int(lane_hist.shape[0]//2)
+        if debug: print('Starting lane search from left={}, right={}'.format(l_start, r_start))
+
+        win_height = int(bin_image.shape[0] / WIN_N)
+        if debug: print('Win height: {}, n_windows={}'.format(win_height, WIN_N))
+
+        # window center positions
+        center_x_left = l_start
+        center_x_right = r_start
+        if debug: print('left_center_x={}'.format(center_x_left))
+        for win_y_idx in range(WIN_N * win_height, 0, -win_height):
+
+            # left lane line
+            win_left_x_low = center_x_left - WIN_PADDING
+            win_left_x_high = center_x_left + WIN_PADDING
+
+            if debug:
+                cv2.rectangle(debug_img, (win_left_x_low, win_y_idx), (win_left_x_high, win_y_idx - win_height),
+                              (0, 255, 0))
+
+            left_px_found_mask = ((win_left_x_low < nonzerox) & (nonzerox < win_left_x_high)
+                                  & (win_y_idx - win_height <= nonzeroy) & (nonzeroy < win_y_idx)).nonzero()[0]
+
+            lane_pts_l.append(left_px_found_mask)
+            if len(left_px_found_mask) > WIN_MIN_PX_TO_RECENTER:
+                # set mean point
+                center_x_left = int(np.mean(nonzerox[left_px_found_mask]))
+
+            ### Right lane line
+            win_right_x_low = center_x_right - WIN_PADDING
+            win_right_x_high = center_x_right + WIN_PADDING
+
+            if debug:
+                cv2.rectangle(debug_img, (win_right_x_low, win_y_idx), (win_right_x_high, win_y_idx - win_height),
+                              (0, 255, 0))
+
+            right_px_found_mask = ((win_right_x_low < nonzerox) & (nonzerox < win_right_x_high)
+                                   & (win_y_idx - win_height <= nonzeroy) & (nonzeroy < win_y_idx)).nonzero()[0]
+
+            lane_pts_r.append(right_px_found_mask)
+            if len(right_px_found_mask) > WIN_MIN_PX_TO_RECENTER:
+                # set mean point
+                center_x_right = int(np.mean(nonzerox[right_px_found_mask]))
+
+            if debug: print(
+                'win_y={}, left_center_x={}, right_center_x={}'.format(win_y_idx, center_x_left, center_x_right))
+
 
     def get_transformation_matrix(self, reverse=False, top_y=50):
         """
@@ -201,7 +262,8 @@ class LaneFinder:
 
         return cv2.getPerspectiveTransform(a, b)
 
-    def undistort_transform(self, img, mtx, dist, warp_matrix):
+
+    def undistort_transform(self, img):
         """
         Takes img, undistorts it using camera parameters and then warps it according to warp_martix.
         @param mtx
@@ -209,7 +271,7 @@ class LaneFinder:
         @param img, source image to perform all transformation
         @return Transformed image
         """
-        undist = cv2.undistort(img, mtx, dist, None, None)
+        undist = cv2.undistort(img, self.camera_mtx, self.dist_coef, None, None)
 
     #     src_pt1 = np.array([(704, 460), (580, 460), (273, 672), (1032, 672)], np.float32)
 
@@ -217,7 +279,7 @@ class LaneFinder:
     #     undist = cv2.polylines(undist, [pts], True, (255,0,0))
 
         im_shape = (img.shape[1], img.shape[0])
-        transformed = cv2.warpPerspective(undist, warp_matrix, im_shape)
+        transformed = cv2.warpPerspective(undist, self.warp_mtx, im_shape)
         return transformed
 
 
