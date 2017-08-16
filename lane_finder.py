@@ -175,11 +175,17 @@ class LaneFinder:
             print('Displacement; left_lane_pos={}, right_lane_pos={}, lane_center={}, car_center={}'
                   .format(left_lane_pos, right_lane_pos, lane_center, car_center))
 
-        self.left_line.detected = True
-        self.left_line.add_fit(lane_left_coef)
+        if self.is_polinoms_parallel(lane_left_coef, lane_right_coef, max_y=y_at_bottom):
 
-        self.right_line.detected = True
-        self.right_line.add_fit(lane_right_coef)
+            self.left_line.detected = True
+            self.left_line.add_fit(lane_left_coef)
+
+            self.right_line.detected = True
+            self.right_line.add_fit(lane_right_coef)
+        else:
+            if debug: print('Too bad, lines does not seem to be parallel.')
+            self.left_line.detected = False
+            self.right_line.detected = False
 
         if debug: print('Radius l={:.1f}, r={:.1f}, lane_center={:.1f}, car_delta={:.2f}m'
                         .format(left_curverad, right_curverad, lane_center, car_displacement * x_px2m))
@@ -187,6 +193,31 @@ class LaneFinder:
         lane_mask = self.get_lane_region(bin_image.shape, lane_left_coef, lane_right_coef, self.get_transformation_matrix(reverse=True), debug=debug)
 
         return lane_mask, left_curverad, right_curverad, car_displacement * x_px2m
+
+
+    def is_polinoms_parallel(self, line_left_coef, line_right_coef, max_y, delta=100):
+        """
+        Check if two polinoms are relatively parallel.
+        Does it by calculating x value at 5 equally distributed y locations and comparing distance differences with delta.
+        If distance is larger than delta - lines are off parallel course.
+
+        :param line_left_coef: coefficients of left line polinom
+        :param line_right_coef: coefficients of right line polinom
+        :param max_y: maximum value of Y coordinate of the image
+        :param delta: maximum allowed difference of distances between points of polinoms
+        :return: True if lines are relatively parallel, otherwise False
+        """
+        deltas = []
+        for y in range(0, max_y, max_y // 5):
+            xl = line_left_coef[0]*y**2 + line_left_coef[1]*y + line_left_coef[2]
+            xr = line_right_coef[0]*y**2 + line_right_coef[1]*y + line_right_coef[2]
+
+            deltas.append(xr - xl)
+
+        max_d = np.max(deltas)
+        min_d = np.min(deltas)
+
+        return max_d - min_d < delta
 
 
     def find_poly_with_window(self, bin_image, lane_pts_l, lane_pts_r, nonzerox, nonzeroy, debug, debug_img, WIN_N=10,

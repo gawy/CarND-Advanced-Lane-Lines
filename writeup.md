@@ -1,5 +1,10 @@
 # Advanced Lane Finding Project
 
+## Change log
+For resubmit code was refactored and splitted into several files.
+Main code extracted to lane_finder.py. It contains single class that combines all needed methods for
+lane detection.
+
 
 ## Camera calibration
 The very first step for camera calibration is to find chessboard corners at every image.
@@ -96,7 +101,10 @@ Then I fitted a polynom using px-to-m scaling. After that just used a formula to
 
 
 # Pipeline video
-[Link](https://youtu.be/I0SjT4m12Xo)
+
+[v2 updated] (https://youtu.be/-OMvELCcWvk)
+
+[v1 Link - had issues](https://youtu.be/I0SjT4m12Xo)
 
 # Discussion
  
@@ -106,6 +114,4 @@ Doing it visually is not a very reliable method
 2. State. What I planned to do but did not get to was to wrap the pipeline code into a class. That would provide 
 a good container to save state in between frame processing and allow for transparent logic of smoothing
 
-3. Smoothing was not implemented by me just by lack of time. Even so it is relatively simple thing to do: have an array
-of limited lenght that would accumulate values and then calculate average.
 

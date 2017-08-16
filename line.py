@@ -15,7 +15,7 @@ class Line:
 
         # polynomial coefficients averaged over the last n iterations
         self.best_fit = None
-        # polynomial coefficients for the most recent fit
+        """ polynomial coefficients for the most recent fit """
         self.current_fit = [np.array([False])]
 
         # radius of curvature of the line in Meters
