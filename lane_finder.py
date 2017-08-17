@@ -28,13 +28,14 @@ class LaneFinder:
     #     image = cv2.undistort(image, mtx, dist, None, None)
 
         # perform perspective transformation
-        undist = self.undistort_transform(image)
+        undist = cv2.undistort(image, self.camera_mtx, self.dist_coef, None, None)
+        warped = self.undistort_transform(undist)
 
         if debug:
-            plt.imshow(undist)
+            plt.imshow(warped)
             plt.show()
 
-        img = undist
+        img = warped
         absx_binary = self.abs_sobel_thresh(img, orient='x', sobel_kernel=3, thresh=(20, 130))
         absy_binary = self.abs_sobel_thresh(img, orient='y', sobel_kernel=3, thresh=(30, 120))
         mag_binary = self.mag_thresh(img, sobel_kernel=3, mag_thresh=(30, 130))
@@ -57,7 +58,7 @@ class LaneFinder:
 
         lane_mask, lr, rr, displacement = self.find_lane_lines(combined, debug=debug)
 
-        res = cv2.addWeighted(image, 1, lane_mask, 0.8, 0)
+        res = cv2.addWeighted(undist, 1, lane_mask, 0.8, 0)
         image_text = 'Radius l={:.1f}m, r={:.1f}m'.format(lr, rr)
         res = cv2.putText(res, image_text, (int(res.shape[0] / 5), int(res.shape[1] * 0.05)),
                           cv2.FONT_HERSHEY_PLAIN, 4.0, COLOR_INFO_TEXT, thickness=2)
@@ -319,13 +320,13 @@ class LaneFinder:
 
     def undistort_transform(self, img):
         """
-        Takes img, undistorts it using camera parameters and then warps it according to warp_martix.
+        Takes img and then warps it according to warp_martix.
         @param mtx
         @param dist, Distortion coefficients
         @param img, source image to perform all transformation
         @return Transformed image
         """
-        undist = cv2.undistort(img, self.camera_mtx, self.dist_coef, None, None)
+        # undist = cv2.undistort(img, self.camera_mtx, self.dist_coef, None, None)
 
     #     src_pt1 = np.array([(704, 460), (580, 460), (273, 672), (1032, 672)], np.float32)
 
@@ -333,7 +334,7 @@ class LaneFinder:
     #     undist = cv2.polylines(undist, [pts], True, (255,0,0))
 
         im_shape = (img.shape[1], img.shape[0])
-        transformed = cv2.warpPerspective(undist, self.warp_mtx, im_shape, flags=cv2.INTER_NEAREST)
+        transformed = cv2.warpPerspective(img, self.warp_mtx, im_shape, flags=cv2.INTER_NEAREST)
         return transformed
 
 
