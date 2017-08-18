@@ -1,7 +1,10 @@
 # Advanced Lane Finding Project
 
 ## Change log
-For resubmit code was refactored and splitted into several files.
+
+V3: Fixed the way how resulting mask is applied in a pipeline. Now undistorted image is used.
+
+V2: For resubmit code was refactored and splitted into several files.
 Main code extracted to lane_finder.py. It contains single class that combines all needed methods for
 lane detection.
 
@@ -101,6 +104,8 @@ Then I fitted a polynom using px-to-m scaling. After that just used a formula to
 
 
 # Pipeline video
+
+[v3 video](https://youtu.be/bQdpb8ASjOE)
 
 [v2 updated] (https://youtu.be/-OMvELCcWvk)
 
